@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+
+# get bash colors and styles here:
+# http://misc.flogisoft.com/bash/tip_colors_and_formatting
+C_RESET='\e[0m'
+C_RED='\e[31m'
+C_GREEN='\e[32m'
+C_YELLOW='\e[33m'
+
+function __run() #(step, name, cmd)
+{
+    local color output exitcode
+
+    printf "${C_YELLOW}[%s]${C_RESET} %-20s" "$1" "$2"
+    output=$(eval "$3" 2>&1)
+    exitcode=$?
+
+	# set exitcode for phpmd
+	if [[ 'phpmd' == $2 ]]; then
+        if [[ '' == $output ]]; then
+            exitcode=0
+        else
+            exitcode=124
+        fi
+	fi
+
+    if [[ 0 == $exitcode || 130 == $exitcode ]]; then
+        echo -e "${C_GREEN}OK!${C_RESET}"
+    else
+        echo -e "${C_RED}ERRORS!${C_RESET}\n\n$output"
+        exit 1
+    fi
+}
+
+modified="git diff --diff-filter=ACM --name-only --cached  | grep \".php$\""
+files=$(git diff --diff-filter=ACM --name-only --cached | grep ".php$")
+
+if [ -n "$files" ]; then
+
+    # Project folder
+    project=$(git rev-parse --show-toplevel)
+
+    for relative_file_path in $files
+    do
+        staged_files="$staged_files /var/www/html/$relative_file_path"
+    done
+
+    # Replace first blank only
+    staged_files=${staged_files/ /''}
+
+    # Separated by spaces
+    staged_files_separated_by_spaces=$staged_files
+
+    # Remove blank spaces with comma
+    # Separated by commas
+    staged_files_separated_by_comma=${staged_files// /,}
+
+    __run "1/5" "php lint" 'docker exec web bash -c "${modified} | xargs -n1 -P4 php -l -d display_errors=On"'
+    __run "2/5" "code sniffer" 'docker exec web bash -c "${modified} | xargs -r vendor/bin/phpcs --report=code --colors --report-width=80 --standard=PSR2 --error-severity=1"'
+    __run "3/5" "phpstan" 'docker exec web bash -c "${modified} | xargs -r vendor/bin/phpstan analyse"'
+    __run "4/5" "phpmd" 'docker exec web bash -c "vendor/bin/phpmd ${staged_files_separated_by_comma} text cleancode,codesize,controversial,design,naming,unusedcode --suffixes php"'
+    __run "5/5" "phpcpd" 'docker exec web bash -c "${modified} | xargs -r vendor/bin/phpcpd --min-lines=3 --min-tokens=40"'
+
+fi
+
+exit 0
